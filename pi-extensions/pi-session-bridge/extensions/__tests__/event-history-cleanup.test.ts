@@ -9,6 +9,9 @@ for (const row of [
 	{ name: "own pid", filename: `${process.pid}.jsonl`, alive: false, keep: true },
 	{ name: "dead pid", filename: "9999999.jsonl", alive: false, keep: false },
 	{ name: "live pid", filename: `${process.pid + 12_345}.jsonl`, alive: true, keep: true },
+	{ name: "own pid second session", filename: `${process.pid}-1.jsonl`, alive: false, keep: true },
+	{ name: "dead pid second session", filename: "9999999-1.jsonl", alive: false, keep: false },
+	{ name: "live pid second session", filename: `${process.pid + 12_345}-1.jsonl`, alive: true, keep: true },
 	{ name: "non-spill file", filename: "ignored.txt", alive: false, keep: true },
 ]) {
 	test(`spill cleanup ${row.name}`, () => {

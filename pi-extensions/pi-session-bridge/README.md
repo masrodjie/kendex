@@ -25,7 +25,7 @@ Restart Pi after installation. Use `kendex update-pi --check` to preview the ins
 
 ## How it works
 
-- Each Pi session opens a connection on your own machine and writes a small file saying where that connection is.
+- Each Pi session opens a connection on your own machine and writes a small file saying where that connection is. A process that runs several sessions at once, such as pi-web-ui, gets one connection per session, so `pi-bridge list` shows that pid once per session.
 - The CLI reads those files to find the session you asked for.
 - It sends your request down that channel, and the session sends the result back.
 - A session you subscribed to keeps sending you what it does next.

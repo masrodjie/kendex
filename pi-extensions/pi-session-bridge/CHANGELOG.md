@@ -2,6 +2,10 @@
 
 ## Consumer-impacting changes
 
+### Unreleased
+
+- A process that runs several sessions at once, such as pi-web-ui with one Pi runtime per open conversation, now keeps one bridge per session. Before, every session in that process wrote the same `pi-<pid>.sock` and `instances/<pid>.json`, so starting or closing one conversation removed or overwrote another's bridge, and `pi-bridge list` showed only one of them, or none. The second and later bridges of a process are named `<pid>-<slot>`; a process with one session keeps the plain `<pid>` names. `--pid` matches every bridge of that process, so target one of them with `--session` or `--socket`.
+
 ### 3.0.1
 
 - Session shutdown, reload and session replacement no longer hang on a bridge client that never closes its connection. Each client gets one second to close after the bridge ends it, then is disconnected, and the socket file is removed.

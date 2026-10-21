@@ -100,7 +100,7 @@ const messages = {
 
 export class BridgeHistory {
 	private readonly entries: HistoryEntry[] = [];
-	readonly rawSpillPath: string;
+	rawSpillPath: string;
 	private readonly limits: () => HistoryLimits;
 	private readonly warn: HistoryWarn;
 	private bytes = 0;
@@ -119,6 +119,12 @@ export class BridgeHistory {
 		this.rawSpillPath = rawSpillPath;
 		this.limits = limits;
 		this.warn = warn;
+	}
+
+	/** Move the sidecar to `rawSpillPath`. Only while nothing is spilled, i.e.
+	 * before the first spill or after `cleanup()`. */
+	relocate(rawSpillPath: string): void {
+		this.rawSpillPath = rawSpillPath;
 	}
 
 	get sizeBytes(): number {
@@ -447,7 +453,7 @@ export function cleanupStaleSpills(rawDir: string, isAlive: (pid: number) => boo
 		return;
 	}
 	for (const name of entries) {
-		const match = /^(\d+)\.jsonl$/.exec(name);
+		const match = /^(\d+)(?:-\d+)?\.jsonl$/.exec(name);
 		if (!match) continue;
 		const pid = Number.parseInt(match[1]!, 10);
 		if (!Number.isFinite(pid)) continue;

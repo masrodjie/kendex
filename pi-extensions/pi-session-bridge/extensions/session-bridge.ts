@@ -6,6 +6,9 @@
  *
  * Discovery:
  *   ${PI_BRIDGE_DIR:-/tmp/pi-session-bridge-$UID}/instances/<pid>.json
+ *   A process that runs several sessions at once (one Pi runtime per open
+ *   conversation, as pi-web-ui does) names the second and later bridges
+ *   <pid>-<slot>, for the registry, the socket and the raw sidecar alike.
  *
  * Protocol:
  *   Clients connect to the advertised socket and send one JSON object per LF.
@@ -40,6 +43,7 @@ const DEFAULT_MAX_RAW_SPILL_BYTES = 16 * 1024 * 1024;
 
 const PROTOCOL = "pi-session-bridge.v1";
 const INSTALL_SYMBOL = Symbol.for("kendex.pi-session-bridge.installed");
+const SLOTS_SYMBOL = Symbol.for("kendex.pi-session-bridge.slots");
 const STATUS_KEY = "session-bridge";
 const QUESTION_SERVICE_SYMBOL = Symbol.for("kendex.pi-questions.service");
 const CONFIG_ID = "@vanillagreen/pi-session-bridge";
@@ -177,6 +181,27 @@ function settingString(key: string, fallback: string, cwd?: string): string {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
+/** Slots held by the bridges running in this process. Each running bridge
+ * holds the lowest free slot, so bridges that share a pid never share a file;
+ * slot 0 keeps the plain `<pid>` names of a one-session process. */
+function bridgeSlots(): Set<number> {
+	const scope = globalThis as unknown as Record<PropertyKey, unknown>;
+	scope[SLOTS_SYMBOL] ??= new Set<number>();
+	return scope[SLOTS_SYMBOL] as Set<number>;
+}
+
+function claimSlot(): number {
+	const slots = bridgeSlots();
+	let slot = 0;
+	while (slots.has(slot)) slot++;
+	slots.add(slot);
+	return slot;
+}
+
+export function bridgeFileStem(pid: number, slot: number): string {
+	return slot === 0 ? String(pid) : `${pid}-${slot}`;
+}
+
 export default function sessionBridge(pi: ExtensionAPI) {
 	const guard = pi as unknown as Record<PropertyKey, unknown>;
 	if (guard[INSTALL_SYMBOL]) return;
@@ -188,9 +213,17 @@ export default function sessionBridge(pi: ExtensionAPI) {
 	const bridgeDir = getBridgeDir();
 	const instancesDir = path.join(bridgeDir, "instances");
 	const rawDir = path.join(bridgeDir, "raw");
-	const rawSpillPath = path.join(rawDir, `${process.pid}.jsonl`);
-	const socketPath = path.join(bridgeDir, `pi-${process.pid}.sock`);
-	const registryPath = path.join(instancesDir, `${process.pid}.json`);
+	let slot: number | undefined;
+	let rawSpillPath = "";
+	let socketPath = "";
+	let registryPath = "";
+	function useSlotPaths(next: number) {
+		const stem = bridgeFileStem(process.pid, next);
+		rawSpillPath = path.join(rawDir, `${stem}.jsonl`);
+		socketPath = path.join(bridgeDir, `pi-${stem}.sock`);
+		registryPath = path.join(instancesDir, `${stem}.json`);
+	}
+	useSlotPaths(0);
 	const startedAt = new Date().toISOString();
 	let rawSpillWarned = false;
 	const history = new BridgeHistory(
@@ -251,8 +284,11 @@ export default function sessionBridge(pi: ExtensionAPI) {
 	}
 
 	async function writeRegistry(reason?: string) {
+		// A stopped bridge's slot may already belong to another session's bridge.
+		if (!server) return;
 		currentInfo = getState(reason);
 		await fs.promises.mkdir(instancesDir, { recursive: true, mode: 0o700 });
+		if (!server) return;
 		await fs.promises.writeFile(registryPath, `${JSON.stringify(currentInfo, null, 2)}\n`, { mode: 0o600 });
 	}
 
@@ -313,6 +349,9 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		await fs.promises.mkdir(bridgeDir, { recursive: true, mode: 0o700 });
 		await fs.promises.mkdir(instancesDir, { recursive: true, mode: 0o700 });
 		cleanupStaleSpills(rawDir, isPidAlive);
+		slot = claimSlot();
+		useSlotPaths(slot);
+		history.relocate(rawSpillPath);
 		await unlinkIfExists(socketPath);
 
 		server = net.createServer((socket) => addClient(socket));
@@ -320,13 +359,19 @@ export default function sessionBridge(pi: ExtensionAPI) {
 			broadcast({ type: "bridge_error", error: stringifyError(error), where: "server" });
 		});
 
-		await new Promise<void>((resolve, reject) => {
-			server!.once("error", reject);
-			server!.listen(socketPath, () => {
-				server!.off("error", reject);
-				resolve();
+		try {
+			await new Promise<void>((resolve, reject) => {
+				server!.once("error", reject);
+				server!.listen(socketPath, () => {
+					server!.off("error", reject);
+					resolve();
+				});
 			});
-		});
+		} catch (error) {
+			server = undefined;
+			releaseSlot();
+			throw error;
+		}
 
 		await fs.promises.chmod(bridgeDir, 0o700).catch(() => undefined);
 		await fs.promises.chmod(instancesDir, 0o700).catch(() => undefined);
@@ -387,9 +432,15 @@ export default function sessionBridge(pi: ExtensionAPI) {
 		await unlinkIfExists(socketPath);
 		await unlinkIfExists(registryPath);
 		await history.cleanup();
+		releaseSlot();
 		rawSpillWarned = false;
 		currentCtx = undefined;
 		stopping = false;
+	}
+
+	function releaseSlot() {
+		if (slot !== undefined) bridgeSlots().delete(slot);
+		slot = undefined;
 	}
 
 	function cleanupSync() {
